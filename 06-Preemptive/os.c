@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "reg.h"
 #include "asm.h"
+#include "host.h"
 
 /* Size of our user task stacks in words */
 #define STACK_SIZE	256
@@ -14,6 +15,11 @@
  * set when that data is transferred to the TDR
  */
 #define USART_FLAG_TXE	((uint16_t) 0x0080)
+
+int snprintf(char *buf, size_t size, const char *format, ...);
+unsigned int get_time();
+unsigned long tick_count = 0;
+
 
 void usart_init(void)
 {
@@ -107,10 +113,12 @@ int main(void)
 {
 	unsigned int user_stacks[TASK_LIMIT][STACK_SIZE];
 	unsigned int *usertasks[TASK_LIMIT];
+	unsigned int timestamp;
 	size_t task_count = 0;
 	size_t current_task;
 
 	usart_init();
+	int handle = host_action(SYS_OPEN, "syslog", 4);
 
 	print_str("OS: Starting...\n");
 	print_str("OS: First create task 1\n");
@@ -129,12 +137,102 @@ int main(void)
 	current_task = 0;
 
 	while (1) {
+		char buf_in[128];
+		char buf_out[128];
 		print_str("OS: Activate next task\n");
+		timestamp = get_time();
+		int len = snprintf(buf_in, 128, "task switch%d : in , timestamp : %d\n", current_task, timestamp);
+		host_action(SYS_WRITE, handle, buf_in, len);
 		usertasks[current_task] = activate(usertasks[current_task]);
+		tick_count++;
+		timestamp = get_time();
+		len = snprintf(buf_out, 128, "task switch%d : out, timestamp : %d\n", current_task, timestamp);
+		host_action(SYS_WRITE, handle, buf_out, len);
 		print_str("OS: Back to OS\n");
-
 		current_task = current_task == (task_count - 1) ? 0 : current_task + 1;
 	}
-
+	
 	return 0;
+}
+
+unsigned int get_time()
+{
+	static unsigned int const *reload = (void *) 0xE000E014;
+	static unsigned int const *current = (void *) 0xE000E018;
+	return tick_count * (*reload) + (*reload - *current);
+}
+
+int _snprintf_int(int num, char *buf, int buf_size)
+{
+	int len = 1;
+	char *p;
+	int i = num < 0 ? -num : num;
+
+	for (; i >= 10; i /= 10, len++);
+
+	if (num < 0)
+		len++;
+
+	i = num;
+	p = buf + len - 1;
+	do {
+		if (p < buf + buf_size)
+			*p-- = '0' + i % 10;
+		i /= 10;
+	} while (i != 0);
+
+	if (num < 0)
+		*p = '-';
+
+	return len < buf_size ? len : buf_size;
+}
+
+int snprintf(char *buf, size_t size, const char *format, ...)
+{
+	va_list ap;
+        char *dest = buf;
+	char *last = buf + size; 
+        char ch;      
+
+	va_start(ap, format);
+	for (ch = *format++; dest < last && ch; ch = *format++) {
+		if (ch == '%') {
+			ch = *format++;
+			switch (ch) {
+			case 's' : {
+					char *str = va_arg(ap, char*);
+					/* strncpy */
+					while (dest < last) {
+						if ((*dest = *str++))
+							dest++;
+						else
+							break;
+					}
+				}
+				break;
+			case 'd' : {
+					int num = va_arg(ap, int);
+					dest += _snprintf_int(num, dest, last - dest);
+				}
+				break;
+			case '%' : 
+				*dest++ = ch;
+				break;
+			default :
+				return -1;
+
+			}
+		} else {
+			*dest++ = ch;
+		}
+	}
+	va_end(ap);
+
+	if (dest < last)
+		*dest = 0;
+
+	else
+		*--dest = 0;
+
+	return dest - buf;
 }
