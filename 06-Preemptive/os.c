@@ -20,6 +20,22 @@ int snprintf(char *buf, size_t size, const char *format, ...);
 unsigned int get_time();
 unsigned long tick_count = 0;
 
+/* record the task data */
+struct listItem {
+	unsigned int * stack;
+	unsigned int priority;
+
+};
+
+/* Ready queue */
+struct list {
+	unsigned int uNumOfItem;
+	unsigned int Index;
+	struct listItem task[TASK_LIMIT];
+
+};
+
+struct list ReadyTaskList;
 
 void usart_init(void)
 {
@@ -69,7 +85,7 @@ void delay(int count)
  * works correctly.
  * http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0552a/Babefdjc.html
  */
-unsigned int *create_task(unsigned int *stack, void (*start)(void))
+unsigned int *create_task(unsigned int *stack, void (*start)(void), unsigned int priority, unsigned int uNumOfTask)
 {
 	static int first = 1;
 
@@ -82,6 +98,13 @@ unsigned int *create_task(unsigned int *stack, void (*start)(void))
 		stack[15] = (unsigned int) start;
 		stack[16] = (unsigned int) 0x01000000; /* PSR Thumb bit */
 	}
+
+	/* insert a task into ReadyTaskList and record the priority */
+	ReadyTaskList.uNumOfItem = uNumOfTask;
+	ReadyTaskList.Index = uNumOfTask;
+	ReadyTaskList.task[uNumOfTask].stack = stack;
+	ReadyTaskList.task[uNumOfTask].priority = priority;
+
 	stack = activate(stack);
 
 	return stack;
@@ -122,10 +145,10 @@ int main(void)
 
 	print_str("OS: Starting...\n");
 	print_str("OS: First create task 1\n");
-	usertasks[0] = create_task(user_stacks[0], &task1_func);
+	usertasks[0] = create_task(user_stacks[0], &task1_func, 1, task_count);
 	task_count += 1;
 	print_str("OS: Back to OS, create task 2\n");
-	usertasks[1] = create_task(user_stacks[1], &task2_func);
+	usertasks[1] = create_task(user_stacks[1], &task2_func, 2, task_count);
 	task_count += 1;
 
 	print_str("\nOS: Start round-robin scheduler!\n");
@@ -139,17 +162,25 @@ int main(void)
 	while (1) {
 		char buf_in[128];
 		char buf_out[128];
+		unsigned int biggest = 0;
 		print_str("OS: Activate next task\n");
 		timestamp = get_time();
-		int len = snprintf(buf_in, 128, "task switch%d : in , timestamp : %d\n", current_task, timestamp);
+		int len = snprintf(buf_in, 128, "task%d switch : in , timestamp : %d\n", current_task, timestamp);
 		host_action(SYS_WRITE, handle, buf_in, len);
 		usertasks[current_task] = activate(usertasks[current_task]);
 		tick_count++;
 		timestamp = get_time();
-		len = snprintf(buf_out, 128, "task switch%d : out, timestamp : %d\n", current_task, timestamp);
+		len = snprintf(buf_out, 128, "task%d switch : out, timestamp : %d\n", current_task, timestamp);
 		host_action(SYS_WRITE, handle, buf_out, len);
 		print_str("OS: Back to OS\n");
-		current_task = current_task == (task_count - 1) ? 0 : current_task + 1;
+
+		/* choose the task which has the heighest priority to excute */
+		for ( int i = 0 ; i < task_count ; i++ ) {
+			if ( ReadyTaskList.task[i].priority > biggest ) {
+				current_task = i;
+				biggest = ReadyTaskList.task[i].priority;
+			}
+		}
 	}
 	
 	return 0;
