@@ -3,6 +3,7 @@
 #include "reg.h"
 #include "asm.h"
 #include "host.h"
+#include "clib.h"
 
 /* Size of our user task stacks in words */
 #define STACK_SIZE	256
@@ -151,7 +152,8 @@ int main(void)
 	usertasks[1] = create_task(user_stacks[1], &task2_func, 2, task_count);
 	task_count += 1;
 
-	print_str("\nOS: Start round-robin scheduler!\n");
+	// print_str("\nOS: Start round-robin scheduler!\n");
+	 print_str("\nOS: Start priority-based scheduler!\n");
 
 	/* SysTick configuration */
 	*SYSTICK_LOAD = 7200000;
@@ -162,25 +164,25 @@ int main(void)
 	while (1) {
 		char buf_in[128];
 		char buf_out[128];
-		unsigned int biggest = 0;
+		unsigned int highest = 0;
+		/* choose the task which has the heighest priority to excute */
+		for ( int i = 0 ; i < task_count ; i++ ) {
+			if ( ReadyTaskList.task[i].priority > highest ) {
+				current_task = i;
+				highest = ReadyTaskList.task[i].priority;
+			}
+		}
+
 		print_str("OS: Activate next task\n");
 		timestamp = get_time();
-		int len = snprintf(buf_in, 128, "task%d switch : in , timestamp : %d\n", current_task, timestamp);
+		int len = snprintf(buf_in, 128, "task%d switch : in , timestamp : %d\n", current_task + 1, timestamp);
 		host_action(SYS_WRITE, handle, buf_in, len);
 		usertasks[current_task] = activate(usertasks[current_task]);
 		tick_count++;
 		timestamp = get_time();
-		len = snprintf(buf_out, 128, "task%d switch : out, timestamp : %d\n", current_task, timestamp);
+		len = snprintf(buf_out, 128, "task%d switch : out, timestamp : %d\n", current_task + 1, timestamp);
 		host_action(SYS_WRITE, handle, buf_out, len);
 		print_str("OS: Back to OS\n");
-
-		/* choose the task which has the heighest priority to excute */
-		for ( int i = 0 ; i < task_count ; i++ ) {
-			if ( ReadyTaskList.task[i].priority > biggest ) {
-				current_task = i;
-				biggest = ReadyTaskList.task[i].priority;
-			}
-		}
 	}
 	
 	return 0;
@@ -193,77 +195,3 @@ unsigned int get_time()
 	return tick_count * (*reload) + (*reload - *current);
 }
 
-int _snprintf_int(int num, char *buf, int buf_size)
-{
-	int len = 1;
-	char *p;
-	int i = num < 0 ? -num : num;
-
-	for (; i >= 10; i /= 10, len++);
-
-	if (num < 0)
-		len++;
-
-	i = num;
-	p = buf + len - 1;
-	do {
-		if (p < buf + buf_size)
-			*p-- = '0' + i % 10;
-		i /= 10;
-	} while (i != 0);
-
-	if (num < 0)
-		*p = '-';
-
-	return len < buf_size ? len : buf_size;
-}
-
-int snprintf(char *buf, size_t size, const char *format, ...)
-{
-	va_list ap;
-        char *dest = buf;
-	char *last = buf + size; 
-        char ch;      
-
-	va_start(ap, format);
-	for (ch = *format++; dest < last && ch; ch = *format++) {
-		if (ch == '%') {
-			ch = *format++;
-			switch (ch) {
-			case 's' : {
-					char *str = va_arg(ap, char*);
-					/* strncpy */
-					while (dest < last) {
-						if ((*dest = *str++))
-							dest++;
-						else
-							break;
-					}
-				}
-				break;
-			case 'd' : {
-					int num = va_arg(ap, int);
-					dest += _snprintf_int(num, dest, last - dest);
-				}
-				break;
-			case '%' : 
-				*dest++ = ch;
-				break;
-			default :
-				return -1;
-
-			}
-		} else {
-			*dest++ = ch;
-		}
-	}
-	va_end(ap);
-
-	if (dest < last)
-		*dest = 0;
-
-	else
-		*--dest = 0;
-
-	return dest - buf;
-}
